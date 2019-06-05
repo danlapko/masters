@@ -91,7 +91,8 @@ class Vgg_face_dag(nn.Module):
         # x37 = self.dropout7(x36)
         # x38 = self.fc8(x37)
         # return x38
-        return x4,x9,x15,x23
+        return x2, x4, x7, x9, x12, x14, x16, x19, x21, x23
+
 
 def vgg_face_dag(weights_path=None, **kwargs):
     """
@@ -107,19 +108,10 @@ def vgg_face_dag(weights_path=None, **kwargs):
     return model
 
 
-LossOutput = namedtuple("LossOutput", ["relu1_2", "relu2_2", "relu3_3", "relu4_3"])
-
-
 class LossNetwork(torch.nn.Module):
     def __init__(self, vgg_model):
         super(LossNetwork, self).__init__()
         self.vgg = vgg_model
-        self.layer_name_mapping = [
-            "relu1_2",
-            "relu2_2",
-            "relu3_3",
-            "relu4_3"
-        ]
 
     # Calculate Gram matrix (G = FF^T)
     @staticmethod
@@ -131,6 +123,6 @@ class LossNetwork(torch.nn.Module):
         return G
 
     def forward(self, x):
-        output = [self.gram(out) for out in self.vgg(x)]
+        output = [self.gram(out) for out in self.vgg(x)[-3:-1]]
+        # output = x[-3:-1]
         return output
-

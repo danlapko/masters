@@ -1,7 +1,8 @@
 import torch
 import torch.nn.functional as F
 from torch import nn
-from torchvision.models import resnet18
+
+from models.convgru import ConvGRUCell
 
 
 def conv1x1(in_channels, out_channels, groups=1):
@@ -98,19 +99,18 @@ class UpConv(nn.Module):
                                 mode=self.up_mode)
         self.bn1 = nn.BatchNorm2d(self.out_channels)
         # self.bn1 = nn.InstanceNorm2d(self.out_channels)
-
-        self.attention = nn.Conv2d(self.out_channels, 1, kernel_size=1)
-
         if self.merge_mode == 'concat':
-            self.conv1 = conv3x3(2 * self.out_channels,
-                                 self.out_channels)
+            self.conv1 = conv3x3(2 * self.out_channels, self.out_channels)
+
         else:
             # num of input channels to conv2 is same
             self.conv1 = conv3x3(self.out_channels, self.out_channels)
 
-        self.conv2 = conv3x3(self.out_channels, self.out_channels)
+        self.gruconv = ConvGRUCell(in_channels=self.out_channels, hidden_channels=self.out_channels,
+                                   kernel_size=3)
+        # self.conv2 = conv3x3(self.out_channels, self.out_channels)
 
-    def forward(self, from_down, from_up):
+    def forward(self, from_down, from_up, hidden):
         """ Forward pass
         Arguments:
             from_down: tensor from the encoder pathway
@@ -126,7 +126,9 @@ class UpConv(nn.Module):
         else:
             x = from_up + from_down
         x = F.leaky_relu(self.conv1(x))
-        x = F.leaky_relu(self.conv2(x))
+
+        # x = F.leaky_relu(self.conv2(x))
+        x = self.gruconv(x, hidden)
         return x
 
 
@@ -198,23 +200,28 @@ class UNet(nn.Module):
         for i, m in enumerate(self.modules()):
             self.weight_init(m)
 
-    def forward(self, x):
+    def forward(self, frames):
+        B, D, C, W, H = frames.shape
+        prev_hiddens = [None] * len(self.up_convs)
+        for i_frame in range(D):
+            x = frames[:, i_frame]
 
-        out = x
-        encoder_outs = []
+            encoder_outs = []
 
-        # encoder pathway, save outputs for merging
-        for i, module in enumerate(self.down_convs):
-            x, before_pool = module(x)
-            encoder_outs.append(before_pool)
+            # encoder pathway, save outputs for merging
+            for i, down_conv in enumerate(self.down_convs):
+                x, before_pool = down_conv(x)
+                encoder_outs.append(before_pool)
 
-        torch.cuda.empty_cache()
-        # print("enc out:", x.shape)
-        for i, module in enumerate(self.up_convs):
-            before_pool = encoder_outs[-(i + 2)]
-            x = module(before_pool, x)
+            torch.cuda.empty_cache()
+            # print("enc out:", x.shape)
+            for i, up_conv in enumerate(self.up_convs):
+                before_pool = encoder_outs[-(i + 2)]
 
-        torch.cuda.empty_cache()
+                prev_hidden = prev_hiddens[i]
+                x = up_conv(before_pool, x, prev_hidden)
+
+                prev_hiddens[i] = x
 
         x = F.sigmoid(self.conv_final(x).squeeze())
         return x
@@ -231,11 +238,18 @@ def main_():
         unet_start_filters = 8
         log_interval = 70  # less then len(train_dl)
 
-    model = UNet(in_channels=1, out_channels=1,
-                 depth=5,
-                 start_filts=8,
-                 merge_mode='concat').cuda()
-    optim = torch.optim.Adam(model.parameters(), lr=param.lr)
+    unet = UNet(in_channels=3, out_channels=3,
+                depth=4,
+                start_filts=32,
+                up_mode="upsample",
+                merge_mode='concat')
+
+    optim = torch.optim.Adam(unet.parameters(), lr=param.lr)
+
+    video_btch = torch.autograd.Variable(torch.FloatTensor(32, 7, 3, 128, 128))
+
+    res = unet(video_btch)
+    print(video_btch.shape, res.shape)
 
 
 if __name__ == "__main__":

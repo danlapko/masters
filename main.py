@@ -7,9 +7,9 @@ from datasets.transformers import ToTensor, RandomCrop, Rescale, CenterCrop
 from trainer import Trainer
 
 
-def prepare_dataloaders(sequence_length=7, batch_size=32, cam="cam1", k_for_test=0.2, k_for_train=0.8):
-    dataset = COX(f"/home/danila/masters/datasets/gray/video",
-                  f"/home/danila/masters/datasets/gray/still",
+def prepare_dataloaders(sequence_length=7, batch_size=32, use_rgb=False, cam="cam1", k_for_test=0.2, k_for_train=0.8):
+    dataset = COX(f"/home/danila/masters/datasets/{'rgb_scaled' if use_rgb else 'gray'}/video",
+                  f"/home/danila/masters/datasets/{'rgb_cropped' if use_rgb else 'gray'}/still",
                   sequence_length,
                   cam,
                   transform=Compose([Rescale((80, 64)), RandomCrop((75, 60)), ToTensor("fp32")])
@@ -49,41 +49,48 @@ def main_():
     resnet = 18
 
     # ===== Dataset params =======
-    cam = "cam2"
-    k_for_test = 0.5
-    k_for_train = 0.5
+    use_rgb = False
+    cam = "cam1"
+    k_for_test = 0.1
+    k_for_train = 0.9
     epochs = 1000
-    seq_len = 30
-    batch_size = 100
+    seq_len = 12
+    batch_size = 16
 
     # ===== Training params =======
 
     k_gen = 0.000
     k_discrim = 0.000
     k_mse = 1
-    k_facenet = 1
 
-    train_loader, test_loader = prepare_dataloaders(seq_len, batch_size,  cam, k_for_test=k_for_test,k_for_train=k_for_train)
+    k_vgg = 1
+    k_facenet = 1
+    k_facenet_back = 0.0
+
+    train_loader, test_loader = prepare_dataloaders(seq_len, batch_size, use_rgb, cam, k_for_test=k_for_test,
+                                                    k_for_train=k_for_train)
 
     trainer = Trainer(seq_length=seq_len, color_channels=3,
-                      unet_path=f"pretrained/gray/unet_{unet_depth}_{unet_filts}.mdl",
-                      facenet_path=f"pretrained/gray/facenet_{facenet_filts}.mdl",
-                      discrim_path=f"pretrained/gray/discrim.mdl",
-                      vgg_path=f"pretrained/gray/vgg_face_dag.pth",
+                      unet_path=f"pretrained/{'rgb' if use_rgb else 'gray'}/unet_{unet_depth}_{unet_filts}.mdl",
+                      facenet_path=f"pretrained/{'rgb' if use_rgb else 'gray'}/facenet_{facenet_filts}.mdl",
+                      discrim_path=f"pretrained/{'rgb' if use_rgb else 'gray'}/discrim.mdl",
+                      vgg_path=f"pretrained/{'rgb' if use_rgb else 'gray'}/vgg_face_dag.pth",
                       embedding_size=emb_size,
                       unet_depth=unet_depth,
                       unet_filts=unet_filts,
                       facenet_filts=facenet_filts,
                       resnet=resnet)
 
-    trainer.train(train_loader, test_loader, epochs=epochs, batch_size=batch_size,
-                  k_gen=k_gen,
-                  k_discrim=k_discrim,
-                  k_mse=k_mse,
-                  k_facenet=k_facenet)
+    # trainer.train(train_loader, test_loader, epochs=epochs, batch_size=batch_size,
+    #               k_gen=k_gen,
+    #               k_discrim=k_discrim,
+    #               k_mse=k_mse,
+    #               k_facenet=k_facenet, k_facenet_back=k_facenet_back, k_vgg=k_vgg)
 
     print("\n ######## FINAL TEST ########")
-    trainer.test_test(test_loader)
+    for i in range(10):
+        trainer.test(test_loader, epochs)
+    # trainer.test_test(test_loader)
 
 
 if __name__ == "__main__":

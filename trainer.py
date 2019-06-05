@@ -44,10 +44,7 @@ class Trainer:
         self.discrim_path = discrim_path
         self.facenet_path = facenet_path
 
-        self.one = torch.FloatTensor([1]).to(device)
-        self.mone = self.one * -1
-
-        self.unet = UNet(in_channels=seq_length * color_channels, out_channels=color_channels,
+        self.unet = UNet(in_channels=color_channels, out_channels=color_channels,
                          depth=unet_depth,
                          start_filts=unet_filts,
                          up_mode="upsample",
@@ -90,7 +87,7 @@ class Trainer:
         X, y = next(iter(test_loader))
 
         B, D, C, W, H = X.shape
-        X = X.view(B, C * D, W, H)
+        # X = X.view(B, C * D, W, H)
 
         self.unet.eval()
         self.facenet.eval()
@@ -107,14 +104,14 @@ class Trainer:
         plt.title(f"epoch {epoch} mse={mse.item():.4} facenet={loss_facenet.item():.4} bad={n_bad / B ** 2}")
         i = np.random.randint(0, B)
         a = np.hstack((y[i].transpose(0, 1).transpose(1, 2), y_[i].transpose(0, 1).transpose(1, 2).to(cpu)))
-        b = np.hstack((X[i][0:3].transpose(0, 1).transpose(1, 2),
-                       X[i][-3:].transpose(0, 1).transpose(1, 2)))
+        b = np.hstack((X[i][0].transpose(0, 1).transpose(1, 2),
+                       X[i][-1].transpose(0, 1).transpose(1, 2)))
         plt.imshow(np.vstack((a, b)))
         plt.axis('off')
         plt.show()
 
-        self.writer.add_scalar("test_bad_percent", n_bad / B ** 2, global_step=epoch)
-        self.writer.add_scalar("test_loss", loss_facenet.item(), global_step=epoch)
+        self.writer.add_scalar("test bad_percent", n_bad / B ** 2, global_step=epoch)
+        self.writer.add_scalar("test loss", mse.item(), global_step=epoch)
         # self.writer.add_scalars("test GAN", {"discrim": loss_D.item(),
         #                                      "gen": loss_G.item()}, global_step=epoch)
 
@@ -129,7 +126,7 @@ class Trainer:
             imgs = torch.cat((y_show_[:n_for_show], y_show[:n_for_show]))
             names = list(range(n_for_show)) * 2
             # print(embeds.shape, imgs.shape, len(names))
-            self.writer.add_embedding(mat=embeds, metadata=names, label_img=imgs, tag="embeddings", global_step=epoch)
+            # self.writer.add_embedding(mat=embeds, metadata=names, label_img=imgs, tag="embeddings", global_step=epoch)
 
         trshs, fprs, tprs = roc_curve(embeddings_anc.detach().to(cpu), embeddings_pos.detach().to(cpu))
         rnk1 = rank1(embeddings_anc.detach().to(cpu), embeddings_pos.detach().to(cpu))
@@ -151,7 +148,7 @@ class Trainer:
         x = X[true_idx]
 
         D, C, W, H = x.shape
-        x = x.view(C * D, W, H)
+        # x = x.view(C * D, W, H)
 
         dists = list()
         with torch.no_grad():
@@ -183,7 +180,7 @@ class Trainer:
         plt.show()
 
     def loss_facenet(self, X, y, is_detached=False):
-        B, C, W, H = X.shape
+        B, D, C, W, H = X.shape
 
         y_ = self.unet(X)
 
@@ -228,15 +225,15 @@ class Trainer:
     #     loss_first_layer = self.mse_loss_function(features, features_target)
     #     return loss_unet + loss_first_layer
 
-    def loss_mse_vgg(self, btch_X, btch_y):
+    def loss_mse_vgg(self, btch_X, btch_y, k_mse, k_vgg):
         btch_y_ = self.unet(btch_X)
         # print(btch_y_.shape,btch_y.shape)
-        gram_btch_y_ = self.vgg_loss_network(btch_y_)
-        gram_btch_y = self.vgg_loss_network(btch_y)
-        loss_vgg = 0.0
-        for a, b in zip(gram_btch_y_, gram_btch_y):
-            loss_vgg += self.mse_loss_function(a, b)
-        return loss_vgg*0.001 + self.mse_loss_function(btch_y_, btch_y)
+        perceptual_btch_y_ = self.vgg_loss_network(btch_y_)
+        perceptual_btch_y = self.vgg_loss_network(btch_y)
+        perceptual_loss = 0.0
+        for a, b in zip(perceptual_btch_y_, perceptual_btch_y):
+            perceptual_loss += self.mse_loss_function(a, b)
+        return k_vgg * perceptual_loss + k_mse * self.mse_loss_function(btch_y_, btch_y)
 
     def loss_GAN_discrimator(self, btch_X, btch_y):
         btch_y_ = self.unet(btch_X)
@@ -318,7 +315,7 @@ class Trainer:
         return gradient_penalty
 
     def train(self, train_loader, test_loader, batch_size=2, epochs=30,
-              k_gen=1, k_discrim=0.01, k_mse=0.02, k_facenet=1):
+              k_gen=1, k_discrim=1, k_mse=1, k_facenet=1, k_facenet_back=1, k_vgg=1):
         """
         :param X: np.array shape=(n_videos, n_frames, h, w)
         :param y: np.array shape=(n_videos, h, w)
@@ -326,7 +323,7 @@ class Trainer:
         """
         print("\nSTART TRAINING\n")
 
-        for epoch in range(178, epochs):
+        for epoch in range(epochs):
             self.test(test_loader, epoch)
             self.unet.train()
             self.facenet.train()
@@ -342,9 +339,8 @@ class Trainer:
                 # Mse loss
                 self.unet.zero_grad()
 
-                mse = self.loss_mse_vgg(btch_X, btch_y)
+                mse = self.loss_mse_vgg(btch_X, btch_y, k_mse, k_vgg)
 
-                mse = k_mse * mse
                 mse.backward()
                 self.unet_optimizer.step()
 
@@ -371,6 +367,14 @@ class Trainer:
                 facenet_loss = k_facenet * facenet_loss
                 facenet_loss.backward()
                 self.facenet_optimizer.step()
+
+                self.unet.zero_grad()
+                self.facenet.zero_grad()
+                facenet_back_loss, _, n_bad = self.loss_facenet(btch_X, btch_y)
+
+                facenet_back_loss = k_facenet_back * facenet_back_loss
+                facenet_back_loss.backward()
+                self.unet_optimizer.step()
 
                 print(f"btch {idx * batch_size} mse={mse.item():.4} GAN(G/D)={loss_G.item():.4}/{loss_D.item():.4} "
                       f"facenet={facenet_loss.item():.4} bad={n_bad / B ** 2:.4}")
